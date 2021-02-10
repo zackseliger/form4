@@ -1,4 +1,5 @@
 const fetch = require('node-fetch');
+const { DOMParser } = require('xmldom');
 
 let baseDir = 'https://www.sec.gov/Archives/';
 let baseDailyDir = baseDir+'edgar/daily-index/'
@@ -33,7 +34,10 @@ function parseIdx(text) {
 
 // parse form 4 transaction from text
 function parseTransaction(text) {
-
+	let xmlDoc = (new DOMParser()).parseFromString(text, "text/xml");
+	// console.log(text);
+	console.log(xmlDoc.getElementsByTagName("periodOfReport")[0].textContent);
+	console.log(xmlDoc.getElementsByTagName("issuerCik")[0].textContent);
 }
 
 // get all daily forms
@@ -57,6 +61,7 @@ fetch(baseDailyDir+'2021/QTR1/index.json')
 						parseTransaction(res);
 					})
 					.catch(err=>console.log(err));
+					break;
 				}
 			})
 			.catch(err=>console.log(err));
