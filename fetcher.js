@@ -1,6 +1,7 @@
 const fetch = require('node-fetch');
 const { DOMParser } = require('xmldom');
 const fs = require('fs');
+const database = require('./database');
 
 class Owner {
 	constructor(cik, name) {
@@ -12,8 +13,8 @@ class Owner {
 		this.isTenPercentOwner = false;
 		this.isOther = false;
 
-		this.title = "";
-		this.remarks = "";
+		this.title = null;
+		this.remarks = null;
 	}
 }
 
@@ -104,13 +105,6 @@ function parseForm(text) {
 	let xmlText = text.substring(text.indexOf("<XML>"), text.indexOf("</XML>")+6)
 	let xmlDoc = (new DOMParser()).parseFromString(xmlText, "text/xml");
 
-	{
-		let issuerCik = parseInt(xmlDoc.getElementsByTagName("issuer")[0].getElementsByTagName("issuerCik")[0].textContent);
-		let id = text.substring(text.indexOf("<SEC-DOCUMENT>")+14);
-		id = id.substring(0, id.indexOf(".txt"));
-		console.log(issuerCik+"/"+id);
-	}
-
 	let issuerNode = xmlDoc.getElementsByTagName("issuer")[0];
 	let nonDerivNodes = xmlDoc.getElementsByTagName("nonDerivativeTransaction");
 	let derivNodes = xmlDoc.getElementsByTagName("derivativeTransaction");
@@ -130,10 +124,14 @@ function parseForm(text) {
 		let owner = new Owner(ownerCik, ownerName);
 
 		let relationshipNode = ownersNodes[i].getElementsByTagName("reportingOwnerRelationship")[0];
-		owner.isDirector = relationshipNode.getElementsByTagName("isDirector")[0].textContent === "1";
-		owner.isOfficer = relationshipNode.getElementsByTagName("isOfficer")[0].textContent === "1";
-		owner.isTenPercentOwner = relationshipNode.getElementsByTagName("isTenPercentOwner")[0].textContent === "1";
-		owner.isOther = relationshipNode.getElementsByTagName("isOther")[0].textContent === "1";
+		if (relationshipNode.getElementsByTagName("isDirector").length > 0)
+			owner.isDirector = relationshipNode.getElementsByTagName("isDirector")[0].textContent === "1";
+		if (relationshipNode.getElementsByTagName("isOfficer").length > 0)
+			owner.isOfficer = relationshipNode.getElementsByTagName("isOfficer")[0].textContent === "1";
+		if (relationshipNode.getElementsByTagName("isTenPercentOwner").length > 0)
+			owner.isTenPercentOwner = relationshipNode.getElementsByTagName("isTenPercentOwner")[0].textContent === "1";
+		if (relationshipNode.getElementsByTagName("isOther").length > 0)
+			owner.isOther = relationshipNode.getElementsByTagName("isOther")[0].textContent === "1";
 
 		if (owner.isOfficer) {
 			owner.title = relationshipNode.getElementsByTagName("officerTitle")[0].textContent;
@@ -152,10 +150,10 @@ function parseForm(text) {
 
 		transaction.derivative = false;
 		transaction.security = nonDerivNodes[i].getElementsByTagName("securityTitle")[0].getElementsByTagName("value")[0].textContent;
-		transaction.date = new Date(nonDerivNodes[i].getElementsByTagName("transactionDate")[0].getElementsByTagName("value")[0].textContent);
+		transaction.date = valueOr(nonDerivNodes[i].getElementsByTagName("transactionDate")[0], null);
 		transaction.code = nonDerivNodes[i].getElementsByTagName("transactionCoding")[0].getElementsByTagName("transactionCode")[0].textContent;
 		transaction.acquired = nonDerivNodes[i].getElementsByTagName("transactionAcquiredDisposedCode")[0].getElementsByTagName("value")[0].textContent === "A";
-		transaction.price = parseFloat(nonDerivNodes[i].getElementsByTagName("transactionPricePerShare")[0].getElementsByTagName("value")[0].textContent);
+		transaction.price = parseFloat(valueOr(nonDerivNodes[i].getElementsByTagName("transactionPricePerShare")[0], null));
 		transaction.amount = parseInt(nonDerivNodes[i].getElementsByTagName("transactionShares")[0].getElementsByTagName("value")[0].textContent);
 		transaction.direct = nonDerivNodes[i].getElementsByTagName("directOrIndirectOwnership")[0].getElementsByTagName("value")[0].textContent === "D";
 
@@ -169,22 +167,17 @@ function parseForm(text) {
 
 		transaction.derivative = true;
 		transaction.security = derivNodes[i].getElementsByTagName("securityTitle")[0].getElementsByTagName("value")[0].textContent;
-		transaction.date = new Date(derivNodes[i].getElementsByTagName("transactionDate")[0].getElementsByTagName("value")[0].textContent);
+		transaction.date = valueOr(derivNodes[i].getElementsByTagName("transactionDate")[0], null);
 		transaction.code = derivNodes[i].getElementsByTagName("transactionCoding")[0].getElementsByTagName("transactionCode")[0].textContent;
 		transaction.acquired = derivNodes[i].getElementsByTagName("transactionAcquiredDisposedCode")[0].getElementsByTagName("value")[0].textContent === "A";
-		transaction.price = parseFloat(derivNodes[i].getElementsByTagName("transactionPricePerShare")[0].getElementsByTagName("value")[0].textContent);
-		transactionAmount = parseInt(valueOr(derivNodes[i].getElementsByTagName("transactionShares")[0], null));
+		transaction.price = parseFloat(valueOr(derivNodes[i].getElementsByTagName("transactionPricePerShare")[0], null));
+		transaction.amount = parseInt(valueOr(derivNodes[i].getElementsByTagName("transactionShares")[0], null));
 		transaction.direct = derivNodes[i].getElementsByTagName("directOrIndirectOwnership")[0].getElementsByTagName("value")[0].textContent === "D";
 
 		// just for derivative transactions
-		// transaction.exercisePrice = parseFloat(derivNodes[i].getElementsByTagName("conversionOrExercisePrice")[0].getElementsByTagName("value")[0].textContent);
 		transaction.exercisePrice = parseFloat(valueOr(derivNodes[i].getElementsByTagName("conversionOrExercisePrice")[0], null));
-		if (derivNodes[i].getElementsByTagName("exerciseDate")[0].getElementsByTagName("value").length > 0) {
-			transaction.exercisableDate = new Date(derivNodes[i].getElementsByTagName("exerciseDate")[0].getElementsByTagName("value")[0].textContent);
-		}
-		if (derivNodes[i].getElementsByTagName("expirationDate")[0].getElementsByTagName("value").length > 0) {
-			transaction.expirationDate = new Date(derivNodes[i].getElementsByTagName("expirationDate")[0].getElementsByTagName("value")[0].textContent);
-		}
+		transaction.exercisableDate = valueOr(derivNodes[i].getElementsByTagName("exerciseDate")[0], null);
+		transaction.expirationDate = valueOr(derivNodes[i].getElementsByTagName("expirationDate")[0], null);
 
 		derivTransactions.push(transaction);
 	}
@@ -199,7 +192,7 @@ function parseForm(text) {
 	let day = dateText.substring(6,8);
 	let hour = dateText.substring(8,10);
 	let minute = dateText.substring(10,12);
-	form.filedDate = new Date(`${year}-${month}-${day} ${hour}:${minute}`);
+	form.filedDate = `${year}-${month}-${day} ${hour}:${minute} America/New_York`;
 	// get form id
 	let id = text.substring(text.indexOf("<SEC-DOCUMENT>")+14);
 	id = id.substring(0, id.indexOf(".txt"));
@@ -280,6 +273,10 @@ function writeFormToFile(form, path) {
 	});
 }
 
+function writeFormToDatabase(form) {
+
+}
+
 function getF4Forms() {
 	// make queues and methods that poll from them
 	let toProcess = [];
@@ -294,9 +291,11 @@ function getF4Forms() {
 
 		textData = toProcess.pop();
 		let form = parseForm(textData);
-		writeFormToFile(form, "public");
+		// writeFormToFile(form, "public");
+		let promise = database.writeForm(form);
+		promise.then(res=>console.log(form.issuer.cik+"/"+form.id));
 	}
-	setInterval(processForms, 150);
+	setInterval(processForms, 200);
 	let fetchForms = function() {
 		if (toFetch.length === 0) {
 			doneFetching = true;
@@ -315,26 +314,25 @@ function getF4Forms() {
 	}
 
 	// start fetching
-	fetch(baseDailyDir+'2021/QTR1/index.json', {headers: {"User-Agent": "F4 Analytics"}})
+	fetch(baseDailyDir+'2014/QTR1/index.json', {headers: {"User-Agent": "F4 Analytics"}})
 	.then(res=>res.json())
 	.then(res => {
 		let dirs = res.directory.item;
 		for (let i = 0; i < dirs.length; i++) {
 			// get idx forms sorted by form name
 			if (dirs[i].name.indexOf('form') == 0) {
-				console.log(baseDailyDir+'2021/QTR1/'+dirs[i].href);
-				fetch(baseDailyDir+'2021/QTR1/'+dirs[i].href, {headers: {"User-Agent": "F4 Analytics"}})
+				console.log(baseDailyDir+'2014/QTR1/'+dirs[i].href);
+				fetch(baseDailyDir+'2014/QTR1/'+dirs[i].href, {headers: {"User-Agent": "F4 Analytics"}})
 				.then(res=>res.text())
 				.then(res => {
 					// get individual forms
 					let forms = parseIdx(res);
+					if (forms.length > 0 && toFetch.length === 0) setInterval(fetchForms, 200);
 					for (let j = 0; j < forms.length; j++) {
 						toFetch.push(baseDir+forms[j][4]);
 					}
-					setInterval(fetchForms, 150);
 				})
 				.catch(err=>console.log(err));
-				break;
 			}
 		}
 	})

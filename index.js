@@ -1,8 +1,6 @@
 const express = require('express');
 const session = require('express-session');
-const MySQLStore = require('express-mysql-session')(session);
 require('dotenv').config();
-const database = require('./database');
 
 // set up app
 const app = express();
