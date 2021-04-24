@@ -5,8 +5,11 @@ require('dotenv').config();
 // set up app
 const app = express();
 app.set('view engine', 'ejs');
-app.set('views', __dirname + '/../../views');
 app.use(express.static('public'));
+
+app.get('/', function(req, res) {
+	res.render('homepage');
+});
 
 // have server listen
 app.listen(process.env.PORT || 80, function(err) {

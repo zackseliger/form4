@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS transactions (
 );`)
 .catch(err=>console.error(err.stack));
 
-
 function writeForm(form) {
 	let curr = pool.query(`INSERT INTO issuers (id, name, symbol) VALUES ($1, $2, $3) ON CONFLICT(id) DO NOTHING`, [
 		form.issuer.cik,
@@ -124,6 +123,15 @@ function writeForm(form) {
 	return curr.catch(err=>console.error(err.stack));
 }
 
+function formExists(id, callback) {
+	pool.query(`SELECT id FROM forms WHERE id = $1`, [id], function(err, res) {
+		if (err) return callback(err);
+
+		callback(null, res.rows.length > 0);
+	});
+}
+
 module.exports = {
-	writeForm
+	writeForm,
+	formExists
 };

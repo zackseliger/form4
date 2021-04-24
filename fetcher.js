@@ -101,7 +101,7 @@ function valueOr(node, val) {
 }
 
 // parse form 4 transaction from text
-function parseForm(text) {
+function parseForm(text, formId) {
 	let xmlText = text.substring(text.indexOf("<XML>"), text.indexOf("</XML>")+6)
 	let xmlDoc = (new DOMParser()).parseFromString(xmlText, "text/xml");
 
@@ -148,6 +148,10 @@ function parseForm(text) {
 	for (let i = 0; i < nonDerivNodes.length; i++) {
 		let transaction = new Transaction(owners, issuer);
 
+		if (derivNodes[i].getElementsByTagName("securityTitle").length === 0) continue;
+		if (derivNodes[i].getElementsByTagName("transactionCoding").length === 0) continue;
+		if (derivNodes[i].getElementsByTagName("transactionAcquiredDisposedCode").length === 0) continue;
+
 		transaction.derivative = false;
 		transaction.security = nonDerivNodes[i].getElementsByTagName("securityTitle")[0].getElementsByTagName("value")[0].textContent;
 		transaction.date = valueOr(nonDerivNodes[i].getElementsByTagName("transactionDate")[0], null);
@@ -157,6 +161,8 @@ function parseForm(text) {
 		transaction.amount = parseInt(nonDerivNodes[i].getElementsByTagName("transactionShares")[0].getElementsByTagName("value")[0].textContent);
 		transaction.direct = nonDerivNodes[i].getElementsByTagName("directOrIndirectOwnership")[0].getElementsByTagName("value")[0].textContent === "D";
 
+		if (transaction.date !== null && transaction.date.length > 10) transaction.date = transaction.date.substring(0,10);
+
 		nonDerivTransactions.push(transaction);
 	}
 
@@ -164,6 +170,10 @@ function parseForm(text) {
 	derivTransactions = [];
 	for (let i = 0; i < derivNodes.length; i++) {
 		let transaction = new Transaction(owners, issuer);
+
+		if (derivNodes[i].getElementsByTagName("securityTitle").length === 0) continue;
+		if (derivNodes[i].getElementsByTagName("transactionCoding").length === 0) continue;
+		if (derivNodes[i].getElementsByTagName("transactionAcquiredDisposedCode").length === 0) continue;
 
 		transaction.derivative = true;
 		transaction.security = derivNodes[i].getElementsByTagName("securityTitle")[0].getElementsByTagName("value")[0].textContent;
@@ -178,6 +188,10 @@ function parseForm(text) {
 		transaction.exercisePrice = parseFloat(valueOr(derivNodes[i].getElementsByTagName("conversionOrExercisePrice")[0], null));
 		transaction.exercisableDate = valueOr(derivNodes[i].getElementsByTagName("exerciseDate")[0], null);
 		transaction.expirationDate = valueOr(derivNodes[i].getElementsByTagName("expirationDate")[0], null);
+
+		if (transaction.date !== null && transaction.date.length > 10) transaction.date = transaction.date.substring(0,10);
+		if (transaction.exercisableDate !== null && transaction.exercisableDate.length > 10) transaction.exercisableDate = transaction.exercisableDate.substring(0,10);
+		if (transaction.expirationDate !== null && transaction.expirationDate.length > 10) transaction.expirationDate = transaction.expirationDate.substring(0,10);
 
 		derivTransactions.push(transaction);
 	}
@@ -194,9 +208,7 @@ function parseForm(text) {
 	let minute = dateText.substring(10,12);
 	form.filedDate = `${year}-${month}-${day} ${hour}:${minute} America/New_York`;
 	// get form id
-	let id = text.substring(text.indexOf("<SEC-DOCUMENT>")+14);
-	id = id.substring(0, id.indexOf(".txt"));
-	form.id = id;
+	form.id = formId;
 	// footnotes
 	let footnotes = xmlDoc.getElementsByTagName("footnotes");
 	if (footnotes.length > 0) {
@@ -273,8 +285,14 @@ function writeFormToFile(form, path) {
 	});
 }
 
-function writeFormToDatabase(form) {
-
+function idFromUrl(urlCopy) {
+	let url = urlCopy;
+	url = url.substring(url.indexOf("/")+1);
+	url = url.substring(url.indexOf("/")+1);
+	url = url.substring(url.indexOf("/")+1);
+	url = url.substring(url.indexOf("/")+1);
+	url = url.substring(url.indexOf("/")+1);
+	return url.substring(url.indexOf("/")+1, url.length-4);
 }
 
 function getF4Forms() {
@@ -282,6 +300,9 @@ function getF4Forms() {
 	let toProcess = [];
 	let toFetch = [];
 	let doneFetching = false;
+	let fetchedIdx = false;
+	let fetchWait = 0;
+
 	let processForms = function() {
 		if (toProcess.length === 0 && doneFetching === true) {
 			console.log("done processing");
@@ -289,28 +310,76 @@ function getF4Forms() {
 		}
 		if (toProcess.length < 1) return;
 
-		textData = toProcess.pop();
-		let form = parseForm(textData);
-		// writeFormToFile(form, "public");
-		let promise = database.writeForm(form);
-		promise.then(res=>console.log(form.issuer.cik+"/"+form.id));
+		data = toProcess.pop();
+		let form = parseForm(data.text, data.id);
+		if (form.derivTransactions.length === 0 && form.nonDerivTransactions.length === 0) return;
+
+		database.formExists(form.id, function(err, exists) {
+			if (err) return console.log(err);
+			if (exists) return;
+			// writeFormToFile(form, "public");
+			let promise = database.writeForm(form);
+			promise.then(res=>console.log(form.id));
+		});
 	}
-	setInterval(processForms, 200);
+	setInterval(processForms, 100);
 	let fetchForms = function() {
-		if (toFetch.length === 0) {
+		if (toFetch.length === 0 && fetchedIdx === true) {
 			doneFetching = true;
 			clearInterval(this);
 			console.log("done fetching");
 			return;
 		}
+		if (toFetch.length === 0) return;
+		if (fetchWait > 0) return fetchWait--;
 
-		let url = toFetch.pop();
-		fetch(url, {headers: {"User-Agent": "F4 Analytics"}})
-		.then(res=>res.text())
-		.then(res => {
-			toProcess.push(res);
-		})
-		.catch(err=>console.log(err));
+		let currObj = toFetch.pop();
+
+		if (currObj.type === 'idx') {
+				fetch(currObj.url, {headers: {"User-Agent": "F4 Analytics"}})
+				.then(res=>res.text())
+				.then(res => {
+					fetchedIdx = true;
+					// get individual forms
+					let forms = parseIdx(res);
+					for (let j = 0; j < forms.length; j++) {
+						toFetch.push({
+							url: baseDir+forms[j][4],
+							type: 'form'
+						});
+					}
+				})
+				.catch(err=>console.log(err))
+				.then(res=>console.log("fetch idx"));
+		}
+		if (currObj.type === 'form') {
+			let statusCode = 0;
+			let id = idFromUrl(currObj.url);
+
+			database.formExists(id, function(err, exists) {
+				if (err) return console.log(err);
+				if (exists) {
+					resolved = false;
+					return;
+				}
+
+				fetch(currObj.url, {headers: {"User-Agent": "F4 Analytics"}})
+				.then(res=>{
+					statusCode = res.status;
+					return res.text();
+				})
+				.then(res => {
+					if (statusCode < 200 || statusCode >= 300) return;
+
+					toProcess.push({
+						id: id,
+						text: res
+					});
+					console.log("fetch form");
+				})
+				.catch(err=>console.log(err))
+			});
+		}
 	}
 
 	// start fetching
@@ -320,23 +389,17 @@ function getF4Forms() {
 		let dirs = res.directory.item;
 		for (let i = 0; i < dirs.length; i++) {
 			// get idx forms sorted by form name
-			if (dirs[i].name.indexOf('form') == 0) {
-				console.log(baseDailyDir+'2014/QTR1/'+dirs[i].href);
-				fetch(baseDailyDir+'2014/QTR1/'+dirs[i].href, {headers: {"User-Agent": "F4 Analytics"}})
-				.then(res=>res.text())
-				.then(res => {
-					// get individual forms
-					let forms = parseIdx(res);
-					if (forms.length > 0 && toFetch.length === 0) setInterval(fetchForms, 200);
-					for (let j = 0; j < forms.length; j++) {
-						toFetch.push(baseDir+forms[j][4]);
-					}
-				})
-				.catch(err=>console.log(err));
+			if (dirs[i].name.indexOf('form') === 0) {
+				toFetch.push({
+					url: baseDailyDir+'2014/QTR1/'+dirs[i].href,
+					type: "idx"
+				});
 			}
 		}
 	})
 	.catch(err => console.log(err));
+
+	setInterval(fetchForms, 110);
 }
 
 getF4Forms();
